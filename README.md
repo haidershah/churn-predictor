@@ -7,7 +7,7 @@ You need Anaconda's distribution of Python to run this. The version of Python I'
 Predicting churn rates is a challenging and common problem that data scientists and analysts regularly encounter in any customer-facing business. I built the model using Spark, as it has the ability to efficiently manipulate large datasets.
 
 ## File Descriptions
-- There's a Jupyter Notebook in this project which has all the code and analysis.
+- Sparkify.ipynb - A Jupyter Notebook which has all the code and analysis.
 - mini_sparkify_event_data.json - Data on which the analysis is run
 
 ## Results
