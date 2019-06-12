@@ -14,4 +14,4 @@ Predicting churn rates is a challenging and common problem that data scientists 
 I've answered these questions in the provided Jupyter Notebook and in a Blog Post at: https://medium.com/@rameez.shah/do-airbnb-reviews-have-a-price-tag-b1d08118086d
 
 ## Acknowledgements
-Data is taken Udacity's Data Science Nano Degree Program's Capstone Project.
+Data is taken from Udacity's Data Science Nano Degree Program's Capstone Project.
