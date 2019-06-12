@@ -11,7 +11,7 @@ Predicting churn rates is a challenging and common problem that data scientists 
 - mini_sparkify_event_data.json - Data on which the analysis is run
 
 ## Results
-I've answered these questions in the provided Jupyter Notebook and in a Blog Post at: https://medium.com/@rameez.shah/do-airbnb-reviews-have-a-price-tag-b1d08118086d
+Accompanying blog post with detailed analysis: https://medium.com/@rameez.shah/which-users-are-more-bound-to-leave-music-streaming-services-865e872f4bc?postPublishedType=repub
 
 ## Acknowledgements
 Data is taken from Udacity's Data Science Nano Degree Program's Capstone Project.
