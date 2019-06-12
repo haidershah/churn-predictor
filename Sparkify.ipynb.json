@@ -1,0 +1,871 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Sparkify Project Workspace\n",
+    "This workspace contains a tiny subset (128MB) of the full dataset available (12GB). Feel free to use this workspace to build your project, or to explore a smaller subset with Spark before deploying your cluster on the cloud. Instructions for setting up your Spark cluster is included in the last lesson of the Extracurricular Spark Course content.\n",
+    "\n",
+    "You can follow the steps below to guide your data analysis and model building portion of this project."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 145,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# import libraries\n",
+    "from pyspark.sql import SparkSession\n",
+    "from pyspark.sql.functions import udf, col\n",
+    "from pyspark.sql.types import IntegerType\n",
+    "\n",
+    "from pyspark.ml import Pipeline\n",
+    "from pyspark.ml.feature import StandardScaler, VectorAssembler\n",
+    "from pyspark.ml.linalg import Vectors\n",
+    "from pyspark.ml.classification import RandomForestClassifier\n",
+    "from pyspark.ml.tuning import CrossValidator, ParamGridBuilder\n",
+    "from pyspark.ml.evaluation import BinaryClassificationEvaluator"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 146,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# create a Spark session\n",
+    "spark = SparkSession \\\n",
+    "    .builder \\\n",
+    "    .appName(\"Sparkify\") \\\n",
+    "    .getOrCreate()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Load and Clean Dataset\n",
+    "In this workspace, the mini-dataset file is `mini_sparkify_event_data.json`. Load and clean the dataset, checking for invalid or missing data - for example, records without userids or sessionids. "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 147,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "root\n",
+      " |-- artist: string (nullable = true)\n",
+      " |-- auth: string (nullable = true)\n",
+      " |-- firstName: string (nullable = true)\n",
+      " |-- gender: string (nullable = true)\n",
+      " |-- itemInSession: long (nullable = true)\n",
+      " |-- lastName: string (nullable = true)\n",
+      " |-- length: double (nullable = true)\n",
+      " |-- level: string (nullable = true)\n",
+      " |-- location: string (nullable = true)\n",
+      " |-- method: string (nullable = true)\n",
+      " |-- page: string (nullable = true)\n",
+      " |-- registration: long (nullable = true)\n",
+      " |-- sessionId: long (nullable = true)\n",
+      " |-- song: string (nullable = true)\n",
+      " |-- status: long (nullable = true)\n",
+      " |-- ts: long (nullable = true)\n",
+      " |-- userAgent: string (nullable = true)\n",
+      " |-- userId: string (nullable = true)\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "df = spark.read.json('mini_sparkify_event_data.json')\n",
+    "df.persist()\n",
+    "df.printSchema()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 148,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Total Records: 286,500\n"
+     ]
+    }
+   ],
+   "source": [
+    "print('Total Records:', \"{:,}\".format(df.count()))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 149,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+------+\n",
+      "|userId|\n",
+      "+------+\n",
+      "|      |\n",
+      "|    10|\n",
+      "|   100|\n",
+      "|100001|\n",
+      "|100002|\n",
+      "|100003|\n",
+      "|100004|\n",
+      "|100005|\n",
+      "|100006|\n",
+      "|100007|\n",
+      "|100008|\n",
+      "|100009|\n",
+      "|100010|\n",
+      "|100011|\n",
+      "|100012|\n",
+      "|100013|\n",
+      "|100014|\n",
+      "|100015|\n",
+      "|100016|\n",
+      "|100017|\n",
+      "+------+\n",
+      "only showing top 20 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "# check to see if userId has missing values\n",
+    "df.select(\"userId\").dropDuplicates().sort(\"userId\").show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Turns out that userId has no missing values, but there are userId values that are empty strings, let's remove them."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 150,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# remove empty userIds\n",
+    "df = df.filter(df[\"userId\"] != \"\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 151,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Total Records: 278,154\n"
+     ]
+    }
+   ],
+   "source": [
+    "print('Total Records:', \"{:,}\".format(df.count()))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Total Records went from 286,500 to 278,154, that means there were 8,346 userIds with empty strings as values. These recrods are now removed. Let's move on to sessionIds."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 152,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+---------+\n",
+      "|sessionId|\n",
+      "+---------+\n",
+      "|        1|\n",
+      "|        2|\n",
+      "|        3|\n",
+      "|        4|\n",
+      "|        5|\n",
+      "|        6|\n",
+      "|        7|\n",
+      "|        8|\n",
+      "|        9|\n",
+      "|       10|\n",
+      "|       11|\n",
+      "|       12|\n",
+      "|       13|\n",
+      "|       15|\n",
+      "|       16|\n",
+      "|       17|\n",
+      "|       18|\n",
+      "|       19|\n",
+      "|       20|\n",
+      "|       21|\n",
+      "+---------+\n",
+      "only showing top 20 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "# check whether sessionId has missing values\n",
+    "df.select(\"sessionId\").dropDuplicates().sort(\"sessionId\").show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "sessionId has no missing values so no need to remove any more records."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Exploratory Data Analysis\n",
+    "When you're working with the full dataset, perform EDA by loading a small subset of the data and doing basic manipulations within Spark. In this workspace, you are already provided a small subset of data you can explore.\n",
+    "\n",
+    "### Define Churn\n",
+    "\n",
+    "Once you've done some preliminary analysis, create a column `Churn` to use as the label for your model. I suggest using the `Cancellation Confirmation` events to define your churn, which happen for both paid and free users. As a bonus task, you can also look into the `Downgrade` events.\n",
+    "\n",
+    "### Explore Data\n",
+    "Once you've defined churn, perform some exploratory data analysis to observe the behavior for users who stayed vs users who churned. You can start by exploring aggregates on these two groups of users, observing how much of a specific action they experienced per a certain time unit or number of songs played."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "I will create a column called 'Churn' which will be for users who have visited the page 'Cancellation Confirmation'."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 153,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "52"
+      ]
+     },
+     "execution_count": 153,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# how many records are there where users saw the page 'Cancellation Confirmation'\n",
+    "df.select('page').where(df['page'] == 'Cancellation Confirmation').count()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 154,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Row(artist='Martha Tilston', auth='Logged In', firstName='Colin', gender='M', itemInSession=50, lastName='Freeman', length=277.89016, level='paid', location='Bakersfield, CA', method='PUT', page='NextSong', registration=1538173362000, sessionId=29, song='Rockpools', status=200, ts=1538352117000, userAgent='Mozilla/5.0 (Windows NT 6.1; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0', userId='30', Churn=0)"
+      ]
+     },
+     "execution_count": 154,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# create column called 'Churn' for records where users visited this page\n",
+    "flag_cancel_event = udf(lambda x: 1 if x == \"Cancellation Confirmation\" else 0, IntegerType())\n",
+    "df = df.withColumn(\"Churn\", flag_cancel_event(\"page\"))\n",
+    "\n",
+    "df.head()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "We have successfully created a 'Churn' column where its value is 1 for events when users cancelled their accounts, 0 otherwise. Now let's do a quick spot check. Earlier we saw that there were 52 records with cancellation events, now let's check how many records we have with 'Churn' == 1."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 155,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "52"
+      ]
+     },
+     "execution_count": 155,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# number of records with 'Churn' == 1\n",
+    "df.select('Churn').where(df['Churn'] == 1).count()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Looks good!"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Feature Engineering\n",
+    "Once you've familiarized yourself with the data, build out the features you find promising to train your model on. To work with the full dataset, you can follow the following steps.\n",
+    "- Write a script to extract the necessary features from the smaller subset of data\n",
+    "- Ensure that your script is scalable, using the best practices discussed in Lesson 3\n",
+    "- Try your script on the full data set, debugging your script if necessary\n",
+    "\n",
+    "If you are working in the classroom workspace, you can just extract features based on the small subset of data contained here. Be sure to transfer over this work to the larger dataset when you work on your Spark cluster."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Now we need to decide which of the features we would like to keep: which features do we think play a role in users cancelling their accounts."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 156,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "root\n",
+      " |-- artist: string (nullable = true)\n",
+      " |-- auth: string (nullable = true)\n",
+      " |-- firstName: string (nullable = true)\n",
+      " |-- gender: string (nullable = true)\n",
+      " |-- itemInSession: long (nullable = true)\n",
+      " |-- lastName: string (nullable = true)\n",
+      " |-- length: double (nullable = true)\n",
+      " |-- level: string (nullable = true)\n",
+      " |-- location: string (nullable = true)\n",
+      " |-- method: string (nullable = true)\n",
+      " |-- page: string (nullable = true)\n",
+      " |-- registration: long (nullable = true)\n",
+      " |-- sessionId: long (nullable = true)\n",
+      " |-- song: string (nullable = true)\n",
+      " |-- status: long (nullable = true)\n",
+      " |-- ts: long (nullable = true)\n",
+      " |-- userAgent: string (nullable = true)\n",
+      " |-- userId: string (nullable = true)\n",
+      " |-- Churn: integer (nullable = true)\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "df.printSchema()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 157,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+--------------------+\n",
+      "|                page|\n",
+      "+--------------------+\n",
+      "|              Cancel|\n",
+      "|    Submit Downgrade|\n",
+      "|         Thumbs Down|\n",
+      "|                Home|\n",
+      "|           Downgrade|\n",
+      "|         Roll Advert|\n",
+      "|              Logout|\n",
+      "|       Save Settings|\n",
+      "|Cancellation Conf...|\n",
+      "|               About|\n",
+      "|            Settings|\n",
+      "|     Add to Playlist|\n",
+      "|          Add Friend|\n",
+      "|            NextSong|\n",
+      "|           Thumbs Up|\n",
+      "|                Help|\n",
+      "|             Upgrade|\n",
+      "|               Error|\n",
+      "|      Submit Upgrade|\n",
+      "+--------------------+\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "# look at all possible values for 'page'\n",
+    "df.select('page').dropDuplicates().show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### I will go ahead and use the following as features\n",
+    "- number of thumbs up events\n",
+    "- number of thumbs down events\n",
+    "- number of add friend events\n",
+    "- number of add to playlist events\n",
+    "- number of next song events\n",
+    "- number of error events\n",
+    "\n",
+    "In order to do that, I'll first need to create a column for each feature so that it'll be easier for me to add these features later on. So for example to get number of thumbs up events for a user I'll traverse throught the dataframe and add a 1 if the user has a thumbs up event and a 0 for all other events. Like this, I'll create the following columns:\n",
+    "- isThumbsUp\n",
+    "- isThumbsDown\n",
+    "- isNextSong\n",
+    "- isAddFriend\n",
+    "- isAddToPlaylist\n",
+    "- isError"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 158,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Row(artist='Martha Tilston', auth='Logged In', firstName='Colin', gender='M', itemInSession=50, lastName='Freeman', length=277.89016, level='paid', location='Bakersfield, CA', method='PUT', page='NextSong', registration=1538173362000, sessionId=29, song='Rockpools', status=200, ts=1538352117000, userAgent='Mozilla/5.0 (Windows NT 6.1; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0', userId='30', Churn=0, isThumbsUp=0)"
+      ]
+     },
+     "execution_count": 158,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# add isThumbsUp column\n",
+    "flag_thumbs_up_event = udf(lambda x: 1 if x == 'Thumbs Up' else 0, IntegerType())\n",
+    "df = df.withColumn('isThumbsUp', flag_thumbs_up_event('page'))\n",
+    "df.head()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 159,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Row(artist='Martha Tilston', auth='Logged In', firstName='Colin', gender='M', itemInSession=50, lastName='Freeman', length=277.89016, level='paid', location='Bakersfield, CA', method='PUT', page='NextSong', registration=1538173362000, sessionId=29, song='Rockpools', status=200, ts=1538352117000, userAgent='Mozilla/5.0 (Windows NT 6.1; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0', userId='30', Churn=0, isThumbsUp=0, isThumbsDown=0)"
+      ]
+     },
+     "execution_count": 159,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# add isThumbsDown column\n",
+    "flag_thumbs_down_event = udf(lambda x: 1 if x == 'Thumbs Down' else 0, IntegerType())\n",
+    "df = df.withColumn('isThumbsDown', flag_thumbs_down_event('page'))\n",
+    "df.head()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 160,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Row(artist='Martha Tilston', auth='Logged In', firstName='Colin', gender='M', itemInSession=50, lastName='Freeman', length=277.89016, level='paid', location='Bakersfield, CA', method='PUT', page='NextSong', registration=1538173362000, sessionId=29, song='Rockpools', status=200, ts=1538352117000, userAgent='Mozilla/5.0 (Windows NT 6.1; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0', userId='30', Churn=0, isThumbsUp=0, isThumbsDown=0, isNextSong=1)"
+      ]
+     },
+     "execution_count": 160,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# add isNextSong column\n",
+    "flag_next_song_event = udf(lambda x: 1 if x == 'NextSong' else 0, IntegerType())\n",
+    "df = df.withColumn('isNextSong', flag_next_song_event('page'))\n",
+    "df.head()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 161,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Row(artist='Martha Tilston', auth='Logged In', firstName='Colin', gender='M', itemInSession=50, lastName='Freeman', length=277.89016, level='paid', location='Bakersfield, CA', method='PUT', page='NextSong', registration=1538173362000, sessionId=29, song='Rockpools', status=200, ts=1538352117000, userAgent='Mozilla/5.0 (Windows NT 6.1; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0', userId='30', Churn=0, isThumbsUp=0, isThumbsDown=0, isNextSong=1, isAddFriend=0)"
+      ]
+     },
+     "execution_count": 161,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# add isAddFriend column\n",
+    "flag_add_friend_event = udf(lambda x: 1 if x == 'Add Friend' else 0, IntegerType())\n",
+    "df = df.withColumn('isAddFriend', flag_add_friend_event('page'))\n",
+    "df.head()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 162,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Row(artist='Martha Tilston', auth='Logged In', firstName='Colin', gender='M', itemInSession=50, lastName='Freeman', length=277.89016, level='paid', location='Bakersfield, CA', method='PUT', page='NextSong', registration=1538173362000, sessionId=29, song='Rockpools', status=200, ts=1538352117000, userAgent='Mozilla/5.0 (Windows NT 6.1; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0', userId='30', Churn=0, isThumbsUp=0, isThumbsDown=0, isNextSong=1, isAddFriend=0, isAddToPlaylist=0)"
+      ]
+     },
+     "execution_count": 162,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# add isAddToPlaylist column\n",
+    "flag_add_playlist_event = udf(lambda x: 1 if x == 'Add to Playlist' else 0, IntegerType())\n",
+    "df = df.withColumn('isAddToPlaylist', flag_add_playlist_event('page'))\n",
+    "df.head()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 163,
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "Row(artist='Martha Tilston', auth='Logged In', firstName='Colin', gender='M', itemInSession=50, lastName='Freeman', length=277.89016, level='paid', location='Bakersfield, CA', method='PUT', page='NextSong', registration=1538173362000, sessionId=29, song='Rockpools', status=200, ts=1538352117000, userAgent='Mozilla/5.0 (Windows NT 6.1; WOW64; rv:31.0) Gecko/20100101 Firefox/31.0', userId='30', Churn=0, isThumbsUp=0, isThumbsDown=0, isNextSong=1, isAddFriend=0, isAddToPlaylist=0, isError=0)"
+      ]
+     },
+     "execution_count": 163,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "# add isError column\n",
+    "flag_error_event = udf(lambda x: 1 if x == 'Error' else 0, IntegerType())\n",
+    "df = df.withColumn('isError', flag_error_event('page'))\n",
+    "df.head()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 164,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+---------------+-----------------+---------------+----------------+--------------------+------------+----------+\n",
+      "|sum(isThumbsUp)|sum(isThumbsDown)|sum(isNextSong)|sum(isAddFriend)|sum(isAddToPlaylist)|sum(isError)|sum(Churn)|\n",
+      "+---------------+-----------------+---------------+----------------+--------------------+------------+----------+\n",
+      "|             17|                5|            275|               4|                   7|           0|         0|\n",
+      "|             21|                6|            387|               4|                   8|           0|         0|\n",
+      "|              0|                0|              8|               0|                   0|           0|         1|\n",
+      "|            100|               21|           2111|              28|                  52|           1|         1|\n",
+      "|            171|               41|           4079|              74|                 118|           6|         0|\n",
+      "|              7|                1|            150|               1|                   5|           1|         0|\n",
+      "|            163|               29|           2841|              33|                  72|           1|         1|\n",
+      "|             81|               14|           1914|              31|                  59|           2|         0|\n",
+      "|             58|                3|            820|              11|                  24|           3|         0|\n",
+      "|             96|               17|           1928|              41|                  38|           3|         0|\n",
+      "|             11|                0|             84|               3|                   1|           0|         0|\n",
+      "|             17|                3|            257|               6|                   7|           0|         1|\n",
+      "|             86|               16|           1797|              29|                  61|           3|         1|\n",
+      "|             40|                9|            647|               6|                  20|           1|         0|\n",
+      "|             95|               24|           2070|              41|                  67|           1|         0|\n",
+      "|            303|               28|           3632|              63|                 113|           5|         0|\n",
+      "|            154|               22|           3028|              47|                  89|           0|         1|\n",
+      "|             72|                9|           1125|              12|                  33|           4|         0|\n",
+      "|             11|                5|            230|               7|                   7|           2|         1|\n",
+      "|            166|               25|           3573|              52|                 104|           7|         0|\n",
+      "+---------------+-----------------+---------------+----------------+--------------------+------------+----------+\n",
+      "only showing top 20 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "new_df = df.groupBy('userId').sum().select(['sum(isThumbsUp)', 'sum(isThumbsDown)', 'sum(isNextSong)', \\\n",
+    "                                            'sum(isAddFriend)', 'sum(isAddToPlaylist)', 'sum(isError)', \\\n",
+    "                                            'sum(Churn)'])\n",
+    "new_df.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "Instead of using default column names, let's go ahead and rename our columns to something that makes more sense."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 165,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "root\n",
+      " |-- thumbsUp: long (nullable = true)\n",
+      " |-- thumbsDown: long (nullable = true)\n",
+      " |-- nextSong: long (nullable = true)\n",
+      " |-- addFriend: long (nullable = true)\n",
+      " |-- addToPlaylist: long (nullable = true)\n",
+      " |-- error: long (nullable = true)\n",
+      " |-- label: long (nullable = true)\n",
+      "\n",
+      "+--------+----------+--------+---------+-------------+-----+-----+\n",
+      "|thumbsUp|thumbsDown|nextSong|addFriend|addToPlaylist|error|label|\n",
+      "+--------+----------+--------+---------+-------------+-----+-----+\n",
+      "|      17|         5|     275|        4|            7|    0|    0|\n",
+      "|      21|         6|     387|        4|            8|    0|    0|\n",
+      "|       0|         0|       8|        0|            0|    0|    1|\n",
+      "|     100|        21|    2111|       28|           52|    1|    1|\n",
+      "|     171|        41|    4079|       74|          118|    6|    0|\n",
+      "|       7|         1|     150|        1|            5|    1|    0|\n",
+      "|     163|        29|    2841|       33|           72|    1|    1|\n",
+      "|      81|        14|    1914|       31|           59|    2|    0|\n",
+      "|      58|         3|     820|       11|           24|    3|    0|\n",
+      "|      96|        17|    1928|       41|           38|    3|    0|\n",
+      "|      11|         0|      84|        3|            1|    0|    0|\n",
+      "|      17|         3|     257|        6|            7|    0|    1|\n",
+      "|      86|        16|    1797|       29|           61|    3|    1|\n",
+      "|      40|         9|     647|        6|           20|    1|    0|\n",
+      "|      95|        24|    2070|       41|           67|    1|    0|\n",
+      "|     303|        28|    3632|       63|          113|    5|    0|\n",
+      "|     154|        22|    3028|       47|           89|    0|    1|\n",
+      "|      72|         9|    1125|       12|           33|    4|    0|\n",
+      "|      11|         5|     230|        7|            7|    2|    1|\n",
+      "|     166|        25|    3573|       52|          104|    7|    0|\n",
+      "+--------+----------+--------+---------+-------------+-----+-----+\n",
+      "only showing top 20 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "# rename columns\n",
+    "new_df = new_df.select(col(\"sum(isThumbsUp)\").alias(\"thumbsUp\"), \\\n",
+    "                       col(\"sum(isThumbsDown)\").alias(\"thumbsDown\"), \\\n",
+    "                       col(\"sum(isNextSong)\").alias(\"nextSong\"), \\\n",
+    "                       col(\"sum(isAddFriend)\").alias(\"addFriend\"), \\\n",
+    "                       col(\"sum(isAddToPlaylist)\").alias(\"addToPlaylist\"), \\\n",
+    "                       col(\"sum(isError)\").alias(\"error\"), \\\n",
+    "                       col(\"sum(Churn)\").alias(\"label\"))\n",
+    "new_df.printSchema()\n",
+    "new_df.show()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Modeling\n",
+    "Split the full dataset into train, test, and validation sets. Test out several of the machine learning methods you learned. Evaluate the accuracy of the various models, tuning parameters as necessary. Determine your winning model based on test accuracy and report results on the validation set. Since the churned users are a fairly small subset, I suggest using F1 score as the metric to optimize."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 171,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "train, test, validation = new_df.randomSplit([0.6, 0.2, 0.2], seed=42)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 172,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "assembler = VectorAssembler(inputCols=['thumbsUp', 'thumbsDown', 'nextSong', 'addFriend', 'addToPlaylist', \\\n",
+    "                                       'error'], outputCol=\"features\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 173,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "rf = RandomForestClassifier(labelCol=\"label\", featuresCol=\"features\", numTrees=1)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 174,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "pipeline = Pipeline(stages=[assembler, rf])\n",
+    "\n",
+    "paramGrid = ParamGridBuilder() \\\n",
+    "    .addGrid(model.numTrees,[3, 10]) \\\n",
+    "    .build()\n",
+    "\n",
+    "crossval = CrossValidator(estimator=pipeline,\n",
+    "                          estimatorParamMaps=paramGrid,\n",
+    "                          evaluator=BinaryClassificationEvaluator(),\n",
+    "                          numFolds=3)\n",
+    "\n",
+    "crossval_model = crossval.fit(train)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 175,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "+--------+----------+--------+---------+-------------+-----+-----+--------------------+--------------------+--------------------+----------+\n",
+      "|thumbsUp|thumbsDown|nextSong|addFriend|addToPlaylist|error|label|            features|       rawPrediction|         probability|prediction|\n",
+      "+--------+----------+--------+---------+-------------+-----+-----+--------------------+--------------------+--------------------+----------+\n",
+      "|      21|         6|     387|        4|            8|    0|    0|[21.0,6.0,387.0,4...|[0.33333333333333...|[0.33333333333333...|       1.0|\n",
+      "|     100|        21|    2111|       28|           52|    1|    1|[100.0,21.0,2111....|[0.82926829268292...|[0.82926829268292...|       0.0|\n",
+      "|      81|        14|    1914|       31|           59|    2|    0|[81.0,14.0,1914.0...|[0.82926829268292...|[0.82926829268292...|       0.0|\n",
+      "|      14|         3|     214|        1|            4|    0|    1|[14.0,3.0,214.0,1...|[0.93333333333333...|[0.93333333333333...|       0.0|\n",
+      "|       2|         0|      53|        0|            4|    0|    0|[2.0,0.0,53.0,0.0...|[0.66666666666666...|[0.66666666666666...|       0.0|\n",
+      "|       3|         0|      28|        3|            0|    0|    0|[3.0,0.0,28.0,3.0...|[0.88888888888888...|[0.88888888888888...|       0.0|\n",
+      "|      45|        20|     681|       11|           14|    1|    1|[45.0,20.0,681.0,...|           [0.0,1.0]|           [0.0,1.0]|       1.0|\n",
+      "|       2|         2|      26|        4|            1|    0|    1|[2.0,2.0,26.0,4.0...|[0.88888888888888...|[0.88888888888888...|       0.0|\n",
+      "|       7|         3|     154|        3|            3|    0|    1|[7.0,3.0,154.0,3....|[0.66666666666666...|[0.66666666666666...|       0.0|\n",
+      "|      81|        13|    1571|       22|           44|    1|    0|[81.0,13.0,1571.0...|[0.82926829268292...|[0.82926829268292...|       0.0|\n",
+      "|     110|        15|    2124|       60|           66|    2|    0|[110.0,15.0,2124....|[0.82926829268292...|[0.82926829268292...|       0.0|\n",
+      "|     165|        31|    3159|       41|           83|    4|    0|[165.0,31.0,3159....|           [1.0,0.0]|           [1.0,0.0]|       0.0|\n",
+      "|      43|        28|     747|       20|           25|    0|    0|[43.0,28.0,747.0,...|[0.82926829268292...|[0.82926829268292...|       0.0|\n",
+      "|      23|         8|     518|        7|           12|    0|    1|[23.0,8.0,518.0,7...|           [1.0,0.0]|           [1.0,0.0]|       0.0|\n",
+      "|      37|        25|     751|       14|           16|    0|    0|[37.0,25.0,751.0,...|[0.82926829268292...|[0.82926829268292...|       0.0|\n",
+      "|      35|         8|     800|       14|           22|    1|    1|[35.0,8.0,800.0,1...|[0.82926829268292...|[0.82926829268292...|       0.0|\n",
+      "|      98|        17|    1880|       41|           61|    0|    0|[98.0,17.0,1880.0...|[0.82926829268292...|[0.82926829268292...|       0.0|\n",
+      "|       5|         0|      22|        0|            0|    0|    1|(6,[0,2],[5.0,22.0])|[0.88888888888888...|[0.88888888888888...|       0.0|\n",
+      "|       3|         1|      41|        1|            1|    0|    1|[3.0,1.0,41.0,1.0...|[0.88888888888888...|[0.88888888888888...|       0.0|\n",
+      "|      34|         8|     650|       18|           20|    1|    0|[34.0,8.0,650.0,1...|[0.82926829268292...|[0.82926829268292...|       0.0|\n",
+      "+--------+----------+--------+---------+-------------+-----+-----+--------------------+--------------------+--------------------+----------+\n",
+      "only showing top 20 rows\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Make predictions.\n",
+    "predictions = crossval_model.transform(validation)\n",
+    "predictions.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 179,
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Accuracy 73.46938775510205%\n"
+     ]
+    }
+   ],
+   "source": [
+    "correct_predictions = predictions.filter(predictions.label == predictions.prediction).count()\n",
+    "total = predictions.count()\n",
+    "accuracy = (correct_predictions / total) * 100\n",
+    "\n",
+    "print('Accuracy', str(accuracy) + '%')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# Final Steps\n",
+    "Clean up your code, adding comments and renaming variables to make the code easier to read and maintain. Refer to the Spark Project Overview page and Data Scientist Capstone Project Rubric to make sure you are including all components of the capstone project and meet all expectations. Remember, this includes thorough documentation in a README file in a Github repository, as well as a web app or blog post."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": []
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.6.3"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 2
+}
